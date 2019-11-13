@@ -51,7 +51,7 @@ public class LogstreamConfig {
     return CONFIGS.get(nodeId).createConfiguration(partitionId);
   }
 
-  public static void putConfig(String nodeId, StorageConfigurationManager configManager) {
+  public static void putConfig(String nodeId, StorageConfiguration configManager) {
     CONFIGS.put(nodeId, configManager);
   }
 

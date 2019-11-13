@@ -20,21 +20,16 @@ import io.zeebe.servicecontainer.ServiceStartContext;
 import io.zeebe.util.sched.future.CompletableActorFuture;
 import java.util.concurrent.CompletableFuture;
 
-public class DistributedLogService implements Service<Void> {
+public class DistributedLogService {
 
   private static final MultiRaftProtocol PROTOCOL =
       MultiRaftProtocol.builder()
           // Maps partitionName to partitionId
           .withPartitioner(DistributedLogstreamName.getInstance())
           .build();
-  private final Injector<Atomix> atomixInjector = new Injector<>();
-  private final String primitiveName = "distributed-log";
-  private Atomix atomix;
 
-  @Override
-  public void start(ServiceStartContext startContext) {
-    atomix = atomixInjector.getValue();
-
+  public DistributedLogService(Atomix atomix) {
+    String primitiveName = "distributed-log";
     final CompletableFuture<DistributedLogstream> distributedLogstreamCompletableFuture =
         atomix
             .<DistributedLogstreamBuilder, DistributedLogstreamConfig, DistributedLogstream>
@@ -43,21 +38,6 @@ public class DistributedLogService implements Service<Void> {
             .buildAsync();
 
     final CompletableActorFuture<Void> startFuture = new CompletableActorFuture<>();
-
-    distributedLogstreamCompletableFuture.thenAccept(
-        log -> {
-          startFuture.complete(null);
-        });
-
-    startContext.async(startFuture);
-  }
-
-  @Override
-  public Void get() {
-    return null;
-  }
-
-  public Injector<Atomix> getAtomixInjector() {
-    return atomixInjector;
+    distributedLogstreamCompletableFuture.join();
   }
 }

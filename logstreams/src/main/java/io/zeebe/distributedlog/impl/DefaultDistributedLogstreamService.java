@@ -56,7 +56,6 @@ public class DefaultDistributedLogstreamService
   private String currentLeader;
   private long currentLeaderTerm = -1;
   private long lastPosition;
-  private ServiceContainer serviceContainer;
   private String localMemberId;
   private Logger logger;
 
@@ -129,18 +128,14 @@ public class DefaultDistributedLogstreamService
   }
 
   private LogStream getOrCreateLogStream(String logServiceName) {
-    final LogStream logStream;
-    serviceContainer = LogstreamConfig.getServiceContainer(localMemberId);
+    LogStream logStream;
 
-    if (serviceContainer
-        .hasService(LogStreamServiceNames.logStreamServiceName(logServiceName))
-        .join()) {
-      logStream = LogstreamConfig.getLogStream(localMemberId, partitionId);
-    } else {
+    logStream = LogstreamConfig.getLogStream(localMemberId, partitionId);
+    if (logStream == null) {
       logStream = createLogStream(logServiceName);
+      LogstreamConfig.putLogStream(localMemberId, partitionId, logStream);
     }
 
-    LogstreamConfig.putLogStream(localMemberId, partitionId, logStream);
     return logStream;
   }
 

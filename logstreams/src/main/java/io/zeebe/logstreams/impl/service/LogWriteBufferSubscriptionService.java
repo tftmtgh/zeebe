@@ -15,8 +15,7 @@ import io.zeebe.servicecontainer.ServiceStartContext;
 import io.zeebe.servicecontainer.ServiceStopContext;
 import io.zeebe.util.sched.future.ActorFuture;
 
-public class LogWriteBufferSubscriptionService implements Service<Subscription> {
-  private final Injector<Dispatcher> logWritebufferInjector = new Injector<>();
+public class LogWriteBufferSubscriptionService {
 
   private final String subscriptionName;
 
@@ -24,10 +23,6 @@ public class LogWriteBufferSubscriptionService implements Service<Subscription> 
 
   public LogWriteBufferSubscriptionService(String subscriptionName) {
     this.subscriptionName = subscriptionName;
-  }
-
-  @Override
-  public void start(ServiceStartContext startContext) {
     final Dispatcher logBuffer = logWritebufferInjector.getValue();
 
     subscriptionFuture = logBuffer.openSubscriptionAsync(subscriptionName);

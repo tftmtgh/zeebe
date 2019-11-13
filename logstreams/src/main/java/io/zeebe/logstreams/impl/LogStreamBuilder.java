@@ -33,7 +33,6 @@ public class LogStreamBuilder {
   protected final int partitionId;
   protected final AtomicLongPosition commitPosition = new AtomicLongPosition();
   protected final ActorConditions onCommitPositionUpdatedConditions = new ActorConditions();
-  protected ServiceContainer serviceContainer;
   protected String logName;
   protected String logRootPath;
   protected String logDirectory;
@@ -45,11 +44,6 @@ public class LogStreamBuilder {
 
   public LogStreamBuilder(final int partitionId) {
     this.partitionId = partitionId;
-  }
-
-  public LogStreamBuilder serviceContainer(final ServiceContainer serviceContainer) {
-    this.serviceContainer = serviceContainer;
-    return this;
   }
 
   public LogStreamBuilder logName(final String logName) {
@@ -112,10 +106,6 @@ public class LogStreamBuilder {
     return partitionId;
   }
 
-  public ServiceContainer getServiceContainer() {
-    return serviceContainer;
-  }
-
   public AtomicLongPosition getCommitPosition() {
     return commitPosition;
   }
@@ -124,38 +114,18 @@ public class LogStreamBuilder {
     return onCommitPositionUpdatedConditions;
   }
 
-  public ActorFuture<LogStream> build() {
-    Objects.requireNonNull(serviceContainer, "serviceContainer");
+  public LogStream build() {
     validate();
 
-    final CompositeServiceBuilder installOperation =
-        serviceContainer.createComposite(logStreamRootServiceName(logName));
-
-    final ServiceName<LogStream> logStreamServiceName = addServices(installOperation);
-
-    return installOperation.installAndReturn(logStreamServiceName);
-  }
-
-  private ServiceName<LogStream> addServices(final CompositeServiceBuilder installOperation) {
-    final ServiceName<LogStorage> logStorageServiceName = logStorageServiceName(logName);
-    final ServiceName<LogStream> logStreamServiceName = logStreamServiceName(logName);
-
     final FsLogStorageConfiguration storageConfig =
-        new FsLogStorageConfiguration(
-            logSegmentSize, getLogDirectory(), initialLogSegmentId, deleteOnClose);
+      new FsLogStorageConfiguration(
+        logSegmentSize, getLogDirectory(), initialLogSegmentId, deleteOnClose);
 
-    final FsLogStorageService logStorageService =
-        new FsLogStorageService(storageConfig, partitionId, logStorageStubber);
-    installOperation.createService(logStorageServiceName, logStorageService).install();
+    final FsLogStorage logStorage = logStorageStubber.apply(new FsLogStorage(storageConfig));
 
-    final LogStreamService logStreamService = new LogStreamService(this);
-    installOperation
-        .createService(logStreamServiceName, logStreamService)
-        .dependency(logStorageServiceName, logStreamService.getLogStorageInjector())
-        .install();
-
-    return logStreamServiceName;
+    return new LogStreamService(this, logStorage);
   }
+
 
   private void validate() {
     Objects.requireNonNull(logName, "logName");

@@ -26,8 +26,6 @@ import io.zeebe.broker.system.configuration.ClusterCfg;
 import io.zeebe.broker.system.configuration.DataCfg;
 import io.zeebe.broker.system.configuration.NetworkCfg;
 import io.zeebe.distributedlog.impl.LogstreamConfig;
-import io.zeebe.servicecontainer.Service;
-import io.zeebe.servicecontainer.ServiceStartContext;
 import io.zeebe.servicecontainer.ServiceStopContext;
 import io.zeebe.util.ByteValue;
 import io.zeebe.util.sched.future.ActorFuture;
@@ -42,19 +40,15 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 
-public class AtomixService implements Service<Atomix> {
+public class AtomixService {
 
   private static final Logger LOG = Loggers.CLUSTERING_LOGGER;
 
   private final BrokerCfg configuration;
-  private Atomix atomix;
+  private final Atomix atomix;
 
-  public AtomixService(final BrokerCfg configuration) {
+  public AtomixService(BrokerCfg configuration) {
     this.configuration = configuration;
-  }
-
-  @Override
-  public void start(final ServiceStartContext startContext) {
     final ClusterCfg clusterCfg = configuration.getCluster();
 
     final int nodeId = clusterCfg.getNodeId();
@@ -123,7 +117,6 @@ public class AtomixService implements Service<Atomix> {
     LogstreamConfig.putRestoreFactory(localMemberId, restoreFactory);
   }
 
-  @Override
   public void stop(final ServiceStopContext stopContext) {
     final String localMemberId = atomix.getMembershipService().getLocalMember().id().id();
     final CompletableFuture<Void> stopFuture = atomix.stop();
@@ -131,8 +124,7 @@ public class AtomixService implements Service<Atomix> {
     LogstreamConfig.removeRestoreFactory(localMemberId);
   }
 
-  @Override
-  public Atomix get() {
+  public Atomix getAtomix() {
     return atomix;
   }
 

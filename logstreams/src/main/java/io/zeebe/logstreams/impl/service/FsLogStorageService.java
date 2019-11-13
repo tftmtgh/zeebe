@@ -40,10 +40,6 @@ public class FsLogStorageService extends Actor implements Service<LogStorage> {
     this.partitionId = partitionId;
     this.logStorageStubber = logStorageStubber;
     closeRequested = false;
-  }
-
-  @Override
-  public void start(final ServiceStartContext startContext) {
     logStorage = logStorageStubber.apply(new FsLogStorage(config));
     startContext.async(startContext.getScheduler().submitActor(this));
   }

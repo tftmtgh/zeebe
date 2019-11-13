@@ -8,6 +8,7 @@
 package io.zeebe.broker.engine.impl;
 
 import io.atomix.core.Atomix;
+import io.zeebe.broker.PartitionChangeListener;
 import io.zeebe.broker.clustering.base.partitions.Partition;
 import io.zeebe.engine.processor.workflow.message.command.SubscriptionCommandMessageHandler;
 import io.zeebe.logstreams.log.LogStream;
@@ -21,17 +22,15 @@ import io.zeebe.util.sched.Actor;
 import org.agrona.collections.Int2ObjectHashMap;
 
 public class SubscriptionApiCommandMessageHandlerService extends Actor
-    implements Service<SubscriptionCommandMessageHandler> {
+    implements PartitionChangeListener {
 
-  private final Injector<Atomix> atomixInjector = new Injector<>();
   private final Int2ObjectHashMap<LogStream> leaderPartitions = new Int2ObjectHashMap<>();
-  private final ServiceGroupReference<Partition> leaderPartitionsGroupReference =
-      ServiceGroupReference.<Partition>create()
-          .onAdd(this::addPartition)
-          .onRemove(this::removePartition)
-          .build();
   private SubscriptionCommandMessageHandler messageHandler;
   private Atomix atomix;
+
+  public SubscriptionApiCommandMessageHandlerService(Atomix atomix) {
+    this.atomix = atomix;
+  }
 
   @Override
   public String getName() {
@@ -45,19 +44,13 @@ public class SubscriptionApiCommandMessageHandlerService extends Actor
   }
 
   @Override
-  public void start(ServiceStartContext context) {
-    atomix = atomixInjector.getValue();
-    context.async(context.getScheduler().submitActor(this));
+  public void onNewLeaderPartition(int partitionId) {
+    addPartition(partitionId);
   }
 
   @Override
-  public void stop(ServiceStopContext stopContext) {
-    stopContext.async(actor.close());
-  }
-
-  @Override
-  public SubscriptionCommandMessageHandler get() {
-    return messageHandler;
+  public void onNewFollowerPartition(int partitionId) {
+    removePartition(partitionId);
   }
 
   private void addPartition(final ServiceName<Partition> sericeName, final Partition partition) {
@@ -66,13 +59,5 @@ public class SubscriptionApiCommandMessageHandlerService extends Actor
 
   private void removePartition(final ServiceName<Partition> sericeName, final Partition partition) {
     actor.submit(() -> leaderPartitions.remove(partition.getPartitionId()));
-  }
-
-  public ServiceGroupReference<Partition> getLeaderParitionsGroupReference() {
-    return leaderPartitionsGroupReference;
-  }
-
-  public Injector<Atomix> getAtomixInjector() {
-    return atomixInjector;
   }
 }

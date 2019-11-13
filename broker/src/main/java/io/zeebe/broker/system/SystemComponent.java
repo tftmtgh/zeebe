@@ -15,7 +15,6 @@ import static io.zeebe.broker.system.SystemServiceNames.BROKER_HEALTH_CHECK_SERV
 import static io.zeebe.broker.system.SystemServiceNames.BROKER_HTTP_SERVER;
 import static io.zeebe.broker.system.SystemServiceNames.LEADER_MANAGEMENT_REQUEST_HANDLER;
 
-import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.hotspot.DefaultExports;
 import io.zeebe.broker.system.configuration.SocketBindingCfg;
 import io.zeebe.broker.system.management.LeaderManagementRequestHandler;
@@ -24,8 +23,6 @@ import io.zeebe.broker.system.monitoring.BrokerHttpServerService;
 import io.zeebe.servicecontainer.ServiceContainer;
 
 public class SystemComponent implements Component {
-
-  private static final CollectorRegistry METRICS_REGISTRY = CollectorRegistry.defaultRegistry;
 
   static {
     // enable hotspot prometheus metric collection

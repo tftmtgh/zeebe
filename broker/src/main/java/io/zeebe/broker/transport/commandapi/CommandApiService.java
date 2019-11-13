@@ -7,6 +7,7 @@
  */
 package io.zeebe.broker.transport.commandapi;
 
+import io.zeebe.broker.PartitionChangeListener;
 import io.zeebe.broker.clustering.base.partitions.Partition;
 import io.zeebe.broker.transport.backpressure.PartitionAwareRequestLimiter;
 import io.zeebe.broker.transport.backpressure.RequestLimiter;
@@ -19,53 +20,61 @@ import io.zeebe.servicecontainer.Service;
 import io.zeebe.servicecontainer.ServiceGroupReference;
 import io.zeebe.servicecontainer.ServiceName;
 import io.zeebe.servicecontainer.ServiceStartContext;
+import io.zeebe.transport.Loggers;
 import io.zeebe.transport.ServerOutput;
 import io.zeebe.transport.ServerTransport;
+import io.zeebe.transport.Transports;
+import io.zeebe.transport.impl.memory.NonBlockingMemoryPool;
+import io.zeebe.util.ByteValue;
+import io.zeebe.util.sched.ActorScheduler;
+import java.net.InetSocketAddress;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
 
-public class CommandApiService implements Service<CommandApiService> {
+public class CommandApiService implements PartitionChangeListener {
 
-  private final ServiceGroupReference<Partition> leaderPartitionsGroupReference;
-  private final Injector<ServerTransport> serverTransportInjector = new Injector<>();
   private final CommandApiMessageHandler service;
   private final PartitionAwareRequestLimiter limiter;
-  private ServerOutput serverOutput;
+  public static final Logger LOG = Loggers.TRANSPORT_LOGGER;
 
-  public CommandApiService(
-      CommandApiMessageHandler commandApiMessageHandler, PartitionAwareRequestLimiter limiter) {
+  // max message size * factor = transport buffer size
+  // - note that this factor is randomly chosen, feel free to change it
+  private static final int TRANSPORT_BUFFER_FACTOR = 16;
+
+  public CommandApiService(ActorScheduler scheduler,
+      CommandApiMessageHandler commandApiMessageHandler, PartitionAwareRequestLimiter limiter,
+      final String readableName,
+    final InetSocketAddress bindAddress,
+    final ByteValue maxMessageSize) {
     this.limiter = limiter;
     this.service = commandApiMessageHandler;
-    leaderPartitionsGroupReference =
-        ServiceGroupReference.<Partition>create()
-            .onAdd(this::addPartition)
-            .onRemove(this::removePartition)
-            .build();
+
+    final ByteValue transportBufferSize =
+      ByteValue.ofBytes(maxMessageSize.toBytes() * TRANSPORT_BUFFER_FACTOR);
+
+    ServerTransport serverTransport = Transports.newServerTransport()
+      .name(readableName)
+      .bindAddress(bindAddress)
+      .scheduler(scheduler)
+      .messageMemoryPool(new NonBlockingMemoryPool(transportBufferSize))
+      .messageMaxLength(maxMessageSize)
+      .build(commandApiMessageHandler, commandApiMessageHandler);
+
+    LOG.info("Bound {} to {}", readableName, bindAddress);
   }
 
   @Override
-  public void start(ServiceStartContext startContext) {
-    serverOutput = serverTransportInjector.getValue().getOutput();
+  public void onNewLeaderPartition(int partitionId) {
+    addPartition(partitionId);
   }
 
   @Override
-  public CommandApiService get() {
-    return this;
+  public void onNewFollowerPartition(int partitionId) {
+    removePartition(partitionId);
   }
 
   public CommandResponseWriter newCommandResponseWriter() {
     return new CommandResponseWriterImpl(serverOutput);
-  }
-
-  public ServiceGroupReference<Partition> getLeaderParitionsGroupReference() {
-    return leaderPartitionsGroupReference;
-  }
-
-  public Injector<ServerTransport> getServerTransportInjector() {
-    return serverTransportInjector;
-  }
-
-  public CommandApiMessageHandler getCommandApiMessageHandler() {
-    return service;
   }
 
   private void removePartition(ServiceName<Partition> partitionServiceName, Partition partition) {
