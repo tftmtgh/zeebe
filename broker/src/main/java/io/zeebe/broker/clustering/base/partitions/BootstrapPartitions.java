@@ -14,13 +14,14 @@ import io.atomix.cluster.MemberId;
 import io.atomix.core.Atomix;
 import io.atomix.protocols.raft.partition.RaftPartition;
 import io.atomix.protocols.raft.partition.RaftPartitionGroup;
+import io.zeebe.broker.clustering.base.raft.RaftPersistentConfigurationManagerService;
 import io.zeebe.broker.system.configuration.BrokerCfg;
 import io.zeebe.distributedlog.StorageConfiguration;
 import io.zeebe.distributedlog.StorageConfigurationManager;
 import io.zeebe.servicecontainer.Injector;
-import io.zeebe.servicecontainer.Service;
 import io.zeebe.servicecontainer.ServiceName;
 import io.zeebe.servicecontainer.ServiceStartContext;
+import io.zeebe.util.sched.ActorScheduler;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -28,23 +29,17 @@ import java.util.stream.Collectors;
  * Always installed on broker startup: reads configuration of all locally available partitions and
  * starts the corresponding services (logstream, partition ...)
  */
-public class BootstrapPartitions implements Service<Void> {
-  private final Injector<StorageConfigurationManager> configurationManagerInjector =
-      new Injector<>();
+public class BootstrapPartitions {
   private final BrokerCfg brokerCfg;
-  private final Injector<Atomix> atomixInjector = new Injector<>();
-  private StorageConfigurationManager configurationManager;
-  private ServiceStartContext startContext;
-  private Atomix atomix;
+  private final RaftPersistentConfigurationManagerService raftCfgManager;
+  private final Atomix atomix;
+  private final ActorScheduler actorScheduler;
 
-  public BootstrapPartitions(final BrokerCfg brokerCfg) {
+  public BootstrapPartitions(final BrokerCfg brokerCfg, ActorScheduler actorScheduler, Atomix atomix, RaftPersistentConfigurationManagerService raftPersistentConfigurationManagerService) {
     this.brokerCfg = brokerCfg;
-  }
-
-  @Override
-  public void start(final ServiceStartContext startContext) {
-    configurationManager = configurationManagerInjector.getValue();
-    atomix = atomixInjector.getValue();
+    this.atomix = atomix;
+    this.actorScheduler = actorScheduler;
+    this.raftCfgManager = raftPersistentConfigurationManagerService;
 
     final RaftPartitionGroup partitionGroup =
         (RaftPartitionGroup) atomix.getPartitionService().getPartitionGroup(Partition.GROUP_NAME);
@@ -56,30 +51,15 @@ public class BootstrapPartitions implements Service<Void> {
             .map(RaftPartition.class::cast)
             .collect(Collectors.toList());
 
-    this.startContext = startContext;
-    startContext.run(
-        () -> {
           for (RaftPartition owningPartition : owningPartitions) {
             installPartition(owningPartition);
           }
-        });
   }
 
-  @Override
-  public Void get() {
-    return null;
-  }
 
   private void installPartition(RaftPartition partition) {
     final StorageConfiguration configuration =
-        configurationManager.createConfiguration(partition.id().id()).join();
-    installPartition(startContext, configuration, partition);
-  }
-
-  private void installPartition(
-      final ServiceStartContext startContext,
-      final StorageConfiguration configuration,
-      RaftPartition partition) {
+        raftCfgManager.createConfiguration(partition.id().id()).join();
     final String partitionName = getPartitionName(configuration.getPartitionId());
     final ServiceName<PartitionInstallService> partitionInstallServiceName =
         partitionInstallServiceName(partitionName);
@@ -92,14 +72,7 @@ public class BootstrapPartitions implements Service<Void> {
             configuration,
             brokerCfg);
 
-    startContext.createService(partitionInstallServiceName, partitionInstallService).install();
+    actorScheduler.submitActor(partitionInstallService);
   }
 
-  public Injector<StorageConfigurationManager> getConfigurationManagerInjector() {
-    return configurationManagerInjector;
-  }
-
-  public Injector<Atomix> getAtomixInjector() {
-    return this.atomixInjector;
-  }
 }

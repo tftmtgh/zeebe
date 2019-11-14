@@ -26,6 +26,7 @@ import io.atomix.cluster.messaging.ClusterCommunicationService;
 import io.atomix.cluster.messaging.ClusterEventService;
 import io.atomix.protocols.raft.partition.RaftPartition;
 import io.zeebe.broker.Loggers;
+import io.zeebe.broker.PartitionChangeListener;
 import io.zeebe.broker.clustering.base.ClusterBaseLayerServiceNames;
 import io.zeebe.broker.engine.AsyncSnapshotingDirectorService;
 import io.zeebe.broker.engine.StreamProcessorService;
@@ -45,15 +46,13 @@ import io.zeebe.logstreams.impl.service.LogStreamServiceNames;
 import io.zeebe.logstreams.log.LogStream;
 import io.zeebe.logstreams.spi.LogStorage;
 import io.zeebe.servicecontainer.CompositeServiceBuilder;
-import io.zeebe.servicecontainer.Service;
 import io.zeebe.servicecontainer.ServiceName;
-import io.zeebe.servicecontainer.ServiceStartContext;
-import io.zeebe.servicecontainer.ServiceStopContext;
 import io.zeebe.util.DurationUtil;
 import io.zeebe.util.sched.Actor;
 import io.zeebe.util.sched.future.ActorFuture;
 import io.zeebe.util.sched.future.CompletableActorFuture;
 import java.time.Duration;
+import java.util.List;
 import org.slf4j.Logger;
 
 /**
@@ -62,8 +61,7 @@ import org.slf4j.Logger;
  * Partition} service(s) into the broker for other components (like client api or stream processing)
  * to attach to.
  */
-public class PartitionInstallService extends Actor
-    implements Service<PartitionInstallService>, PartitionRoleChangeListener {
+public class PartitionInstallService extends Actor implements  PartitionRoleChangeListener {
   private static final Logger LOG = Loggers.CLUSTERING_LOGGER;
 
   private final StorageConfiguration configuration;
@@ -73,8 +71,8 @@ public class PartitionInstallService extends Actor
   private final BrokerCfg brokerCfg;
   private final RaftPartition partition;
   private final ExporterRepository exporterRepository = new ExporterRepository();
+  private final List<PartitionChangeListener> partitonChangeListener;
 
-  private ServiceStartContext startContext;
   private ServiceName<LogStream> logStreamServiceName;
   private ServiceName<Void> openLogStreamServiceName;
   private ServiceName<Partition> leaderPartitionServiceName;
@@ -88,16 +86,51 @@ public class PartitionInstallService extends Actor
 
   public PartitionInstallService(
       RaftPartition partition,
+      List<PartitionChangeListener> partitonChangeListener,
       ClusterEventService clusterEventService,
       ClusterCommunicationService communicationService,
       final StorageConfiguration configuration,
       BrokerCfg brokerCfg) {
     this.partition = partition;
+    this.partitonChangeListener = partitonChangeListener;
     this.configuration = configuration;
     this.partitionId = configuration.getPartitionId();
     this.clusterEventService = clusterEventService;
     this.communicationService = communicationService;
     this.brokerCfg = brokerCfg;
+
+    final int partitionId = configuration.getPartitionId();
+    logName = Partition.getPartitionName(partitionId);
+
+    logStreamServiceName = LogStreamServiceNames.logStreamServiceName(logName);
+    logStorageServiceName = LogStreamServiceNames.logStorageServiceName(logName);
+    leaderInstallRootServiceName = PartitionServiceNames.leaderInstallServiceRootName(logName);
+
+    leaderElection = new PartitionLeaderElection(partition);
+    final ServiceName<PartitionLeaderElection> partitionLeaderElectionServiceName =
+      partitionLeaderElectionServiceName(logName);
+    leaderElectionInstallFuture =
+      partitionInstall
+        .createService(partitionLeaderElectionServiceName, leaderElection)
+        .dependency(ATOMIX_SERVICE, leaderElection.getAtomixInjector())
+        .dependency(ATOMIX_JOIN_SERVICE)
+        .group(LEADERSHIP_SERVICE_GROUP)
+        .install();
+
+    partitionInstall.install();
+
+    // load and validate exporters
+    for (ExporterCfg exporterCfg : brokerCfg.getExporters()) {
+      try {
+        exporterRepository.load(exporterCfg);
+      } catch (ExporterLoadException | ExporterJarLoadException e) {
+        throw new RuntimeException("Failed to load exporter with configuration: " + exporterCfg, e);
+      }
+    }
+
+    leaderPartitionServiceName = leaderPartitionServiceName(logName);
+    openLogStreamServiceName = leaderOpenLogStreamServiceName(logName);
+    followerPartitionServiceName = followerPartitionServiceName(logName);
   }
 
   @Override
@@ -116,61 +149,6 @@ public class PartitionInstallService extends Actor
             LOG.error("Could not install leader election for partition {}", partitionId, e);
           }
         });
-  }
-
-  @Override
-  public void start(final ServiceStartContext startContext) {
-    this.startContext = startContext;
-
-    final int partitionId = configuration.getPartitionId();
-    logName = Partition.getPartitionName(partitionId);
-
-    // TODO: rename/remove?
-    final ServiceName<Void> raftInstallServiceName = raftInstallServiceName(partitionId);
-
-    final CompositeServiceBuilder partitionInstall =
-        startContext.createComposite(raftInstallServiceName);
-
-    logStreamServiceName = LogStreamServiceNames.logStreamServiceName(logName);
-    logStorageServiceName = LogStreamServiceNames.logStorageServiceName(logName);
-    leaderInstallRootServiceName = PartitionServiceNames.leaderInstallServiceRootName(logName);
-
-    leaderElection = new PartitionLeaderElection(partition);
-    final ServiceName<PartitionLeaderElection> partitionLeaderElectionServiceName =
-        partitionLeaderElectionServiceName(logName);
-    leaderElectionInstallFuture =
-        partitionInstall
-            .createService(partitionLeaderElectionServiceName, leaderElection)
-            .dependency(ATOMIX_SERVICE, leaderElection.getAtomixInjector())
-            .dependency(ATOMIX_JOIN_SERVICE)
-            .group(LEADERSHIP_SERVICE_GROUP)
-            .install();
-
-    partitionInstall.install();
-
-    // load and validate exporters
-    for (ExporterCfg exporterCfg : brokerCfg.getExporters()) {
-      try {
-        exporterRepository.load(exporterCfg);
-      } catch (ExporterLoadException | ExporterJarLoadException e) {
-        throw new RuntimeException("Failed to load exporter with configuration: " + exporterCfg, e);
-      }
-    }
-
-    leaderPartitionServiceName = leaderPartitionServiceName(logName);
-    openLogStreamServiceName = leaderOpenLogStreamServiceName(logName);
-    followerPartitionServiceName = followerPartitionServiceName(logName);
-    startContext.getScheduler().submitActor(this);
-  }
-
-  @Override
-  public void stop(ServiceStopContext stopContext) {
-    leaderElection.removeListener(this);
-  }
-
-  @Override
-  public PartitionInstallService get() {
-    return this;
   }
 
   private void transitionToLeader(CompletableActorFuture<Void> transitionComplete, long term) {
