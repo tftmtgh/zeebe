@@ -11,11 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package test
+package containerSuite
 
 import (
 	"context"
 	"fmt"
+	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
@@ -46,7 +47,7 @@ func (s zeebeWaitStrategy) WaitUntilReady(ctx context.Context, target wait.Strat
 		return err
 	}
 
-	client, err := zbc.NewZBClientWithConfig(&zbc.ZBClientConfig{
+	zbClient, err := zbc.NewZBClientWithConfig(&zbc.ZBClientConfig{
 		UsePlaintextConnection: true,
 		GatewayAddress:         fmt.Sprintf("%s:%d", host, mappedPort.Int()),
 	})
@@ -54,46 +55,47 @@ func (s zeebeWaitStrategy) WaitUntilReady(ctx context.Context, target wait.Strat
 		return err
 	}
 
-	defer func() {
-		err := client.Close()
-		if err != nil {
-			fmt.Println("Failed to close ZB client: ", err)
-		}
-	}()
-
-	_, err = client.NewTopologyCommand().Send()
+	_, err = zbClient.NewTopologyCommand().Send()
 
 	for err != nil && status.Code(err) == codes.Unavailable {
 		time.Sleep(s.timeout)
-		_, err = client.NewTopologyCommand().Send()
+		_, err = zbClient.NewTopologyCommand().Send()
 	}
 
-	return err
+	return zbClient.Close()
 }
 
-type containerSuite struct {
-	// timeout specifies the wait period before checking if the container is up
-	timeout time.Duration
-	// containerImage is the ID of docker image to be used
-	containerImage string
+// ContainerSuite sets up a container running Zeebe and tears it down afterwards.
+type ContainerSuite struct {
+	// Timeout specifies the wait period before checking if the container is up
+	Timeout time.Duration
+	// ContainerImage is the ID of docker image to be used
+	ContainerImage string
+
+	// GatewayAddress is the contact point of the spawned Zeebe container specified in the format 'host:port'
+	GatewayAddress string
 
 	suite.Suite
 	container testcontainers.Container
-	client    zbc.ZBClient
 }
 
-func (s *containerSuite) SetupSuite() {
+func (s *ContainerSuite) SetupSuite() {
 	var err error
 	req := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        s.containerImage,
+			Image:        s.ContainerImage,
 			ExposedPorts: []string{"26500"},
-			WaitingFor:   zeebeWaitStrategy{timeout: s.timeout},
+			WaitingFor:   zeebeWaitStrategy{timeout: s.Timeout},
 		},
 		Started: true,
 	}
 
 	ctx := context.Background()
+	err = validateImageExists(ctx, s.ContainerImage)
+	if err != nil {
+		s.T().Fatal(err)
+	}
+
 	s.container, err = testcontainers.GenericContainer(ctx, req)
 	if err != nil {
 		s.T().Fatal(err)
@@ -109,24 +111,29 @@ func (s *containerSuite) SetupSuite() {
 		s.T().Fatal(err)
 	}
 
-	s.client, err = zbc.NewZBClientWithConfig(&zbc.ZBClientConfig{
-		UsePlaintextConnection: true,
-		GatewayAddress:         fmt.Sprintf("%s:%d", host, port.Int()),
-	})
+	s.GatewayAddress = fmt.Sprintf("%s:%d", host, port.Int())
+}
 
+func (s *ContainerSuite) TearDownSuite() {
+	err := s.container.Terminate(context.Background())
 	if err != nil {
 		s.T().Fatal(err)
 	}
 }
 
-func (s *containerSuite) TearDownSuite() {
-	err := s.client.Close()
+func validateImageExists(ctx context.Context, image string) error {
+	dockerClient, err := client.NewClientWithOpts()
 	if err != nil {
-		s.T().Fatal(err)
+		return err
 	}
 
-	err = s.container.Terminate(context.Background())
+	_, _, err = dockerClient.ImageInspectWithRaw(ctx, image)
 	if err != nil {
-		s.T().Fatal(err)
+		if client.IsErrNotFound(err) {
+			return fmt.Errorf("a Docker image containing Zeebe must be built and named '%s'\n", image)
+		}
+
+		return err
 	}
+	return nil
 }
